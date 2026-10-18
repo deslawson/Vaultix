@@ -25,7 +25,7 @@ describe('UserService.consumeChallenge (sqlite integration)', () => {
 
   beforeAll(async () => {
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [User, RefreshToken],
       synchronize: true,

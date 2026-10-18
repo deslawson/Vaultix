@@ -538,7 +538,7 @@ describe('EscrowService', () => {
 
     beforeEach(() => {
       (escrowRepository as any).manager = {
-        connection: { options: { type: 'sqlite' } },
+        connection: { options: { type: 'better-sqlite3' } },
       };
     });
 

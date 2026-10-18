@@ -65,7 +65,7 @@ describe('Milestone Release Integration (e2e-style)', () => {
     moduleRef = await Test.createTestingModule({
       imports: [
         TypeOrmModule.forRoot({
-          type: 'sqlite',
+          type: 'better-sqlite3',
           database: ':memory:',
           entities: [Escrow, Condition, EscrowEvent, Party, StellarEvent, User],
           synchronize: false,

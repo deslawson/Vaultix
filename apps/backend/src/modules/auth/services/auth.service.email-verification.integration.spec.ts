@@ -25,7 +25,7 @@ describe('AuthService email verification (address-bound tokens)', () => {
 
   beforeAll(async () => {
     dataSource = new DataSource({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [User, RefreshToken, EmailVerification],
       synchronize: true,

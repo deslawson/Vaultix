@@ -106,7 +106,7 @@ class TestAdminController {
 @Module({
   imports: [
     TypeOrmModule.forRoot({
-      type: 'sqlite',
+      type: 'better-sqlite3',
       database: ':memory:',
       entities: [User, AdminAuditLog],
       synchronize: true,

@@ -57,7 +57,7 @@ describe('Notification Deduplication (e2e-style)', () => {
     moduleRef = await Test.createTestingModule({
       imports: [
         TypeOrmModule.forRoot({
-          type: 'sqlite',
+          type: 'better-sqlite3',
           database: ':memory:',
           entities: [Notification, NotificationPreference, User],
           synchronize: false,
