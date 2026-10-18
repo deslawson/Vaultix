@@ -487,6 +487,93 @@ describe('EscrowService', () => {
     });
   });
 
+  describe('notification payloads', () => {
+    it('includes actionUrl and recipient email for fulfilled condition notifications', async () => {
+      const escrowWithSeller = {
+        ...mockEscrow,
+        id: 'escrow-456',
+        title: 'Milestone Escrow',
+        status: EscrowStatus.ACTIVE,
+        creatorId: 'user-123',
+        parties: [{ userId: 'user-456', role: PartyRole.SELLER }],
+      } as Escrow;
+
+      escrowRepository.findOne.mockResolvedValue(escrowWithSeller);
+      conditionRepository.findOne.mockResolvedValue({
+        ...mockCondition,
+        id: 'condition-456',
+        isFulfilled: false,
+        escrowId: 'escrow-456',
+      } as Condition);
+      conditionRepository.save.mockResolvedValue({
+        ...mockCondition,
+        id: 'condition-456',
+        escrowId: 'escrow-456',
+        isFulfilled: true,
+      } as Condition);
+      eventRepository.create.mockReturnValue({} as any);
+      eventRepository.save.mockResolvedValue({} as any);
+      userRepository.findOne.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        email: where.id === 'user-123' ? 'buyer@test.com' : 'seller@test.com',
+      } as User));
+
+      await service.fulfillCondition(
+        'escrow-456',
+        'condition-456',
+        { notes: 'Delivered' } as FulfillConditionDto,
+        'user-456',
+      );
+
+      await new Promise(process.nextTick);
+      expect(notificationService.handleEscrowEvent).toHaveBeenCalledWith(
+        'user-123',
+        NotificationEventType.CONDITION_FULFILLED,
+        expect.objectContaining({
+          escrowId: 'escrow-456',
+          actionUrl: expect.stringContaining('/escrows/escrow-456'),
+          email: 'buyer@test.com',
+          partyEmails: expect.arrayContaining(['buyer@test.com', 'seller@test.com']),
+        }),
+        expect.any(String),
+      );
+    });
+
+    it('includes actionUrl and email for expiry notifications', async () => {
+      const escrow = {
+        ...mockEscrow,
+        id: 'escrow-789',
+        title: 'Expired Escrow',
+        status: EscrowStatus.ACTIVE,
+        creatorId: 'user-123',
+        parties: [{ userId: 'user-456', role: PartyRole.SELLER }],
+      } as Escrow;
+
+      escrowRepository.findOne.mockResolvedValue(escrow);
+      eventRepository.create.mockReturnValue({} as any);
+      eventRepository.save.mockResolvedValue({} as any);
+      userRepository.findOne.mockImplementation(async ({ where }: any) => ({
+        id: where.id,
+        email: where.id === 'user-123' ? 'buyer@test.com' : 'seller@test.com',
+      } as User));
+
+      await service.expireBySystem('escrow-789', 'SYSTEM_EXPIRED');
+
+      await new Promise(process.nextTick);
+      expect(notificationService.handleEscrowEvent).toHaveBeenCalledWith(
+        'user-123',
+        NotificationEventType.ESCROW_EXPIRED,
+        expect.objectContaining({
+          escrowId: 'escrow-789',
+          actionUrl: expect.stringContaining('/escrows/escrow-789'),
+          email: 'buyer@test.com',
+          partyEmails: expect.arrayContaining(['buyer@test.com', 'seller@test.com']),
+        }),
+        expect.any(String),
+      );
+    });
+  });
+
   describe('fund - party acceptance gate', () => {
     it('throws BadRequestException when seller has not accepted', async () => {
       const escrowWithPendingSeller = {

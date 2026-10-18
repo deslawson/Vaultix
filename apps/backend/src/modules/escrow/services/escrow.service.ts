@@ -151,6 +151,10 @@ export class EscrowService {
               role: partyDto.role,
               invitedBy: creatorId,
               email: invitedUser?.email ?? undefined,
+              actionUrl: this.buildNotificationActionUrl(savedEscrow.id),
+              partyEmails: invitedUser?.email
+                ? [invitedUser.email]
+                : undefined,
             },
             this.generateIdempotencyKey(
               NotificationEventType.PARTY_INVITED,
@@ -578,6 +582,18 @@ export class EscrowService {
       escrowId: id,
     });
 
+    await this.notifyEscrowParticipants(
+      escrow,
+      NotificationEventType.ESCROW_CANCELLED,
+      {
+        escrowId: id,
+        escrowTitle: escrow.title,
+        reason: dto.reason,
+        previousStatus: escrow.status,
+      },
+      userId,
+    );
+
     return this.findOne(id);
   }
 
@@ -792,6 +808,18 @@ export class EscrowService {
       txHash,
     });
 
+    await this.notifyEscrowParticipants(
+      escrow,
+      NotificationEventType.ESCROW_COMPLETED,
+      {
+        escrowId: escrow.id,
+        escrowTitle: escrow.title,
+        txHash,
+        releasedAt: new Date().toISOString(),
+      },
+      currentUserId,
+    );
+
     return escrow;
   }
 
@@ -865,6 +893,19 @@ export class EscrowService {
         evidence: dto.evidence,
       },
       ipAddress,
+    );
+
+    await this.notifyEscrowParticipants(
+      escrow,
+      NotificationEventType.CONDITION_FULFILLED,
+      {
+        escrowId,
+        escrowTitle: escrow.title,
+        conditionId,
+        notes: dto.notes,
+        evidence: dto.evidence,
+      },
+      userId,
     );
 
     // Dispatch webhook for condition fulfillment
@@ -956,6 +997,18 @@ export class EscrowService {
         confirmedBy: userId,
       },
       ipAddress,
+    );
+
+    await this.notifyEscrowParticipants(
+      escrow,
+      NotificationEventType.CONDITION_CONFIRMED,
+      {
+        escrowId,
+        escrowTitle: escrow.title,
+        conditionId,
+        confirmedBy: userId,
+      },
+      userId,
     );
 
     // Check if all conditions are now met for auto-release
@@ -1279,36 +1332,67 @@ export class EscrowService {
     eventType: NotificationEventType,
     payload: Record<string, unknown>,
     actorId: string,
-    excludeUserId: string | null = actorId,
+    excludeUserId: string | null = actorId ?? null,
   ): Promise<void> {
-    const recipientIds = new Set<string>();
-    if (escrow.creatorId) recipientIds.add(escrow.creatorId);
+    const allRelevantUserIds = new Set<string>();
+    if (escrow.creatorId) allRelevantUserIds.add(escrow.creatorId);
     for (const party of escrow.parties ?? []) {
-      if (party.userId) recipientIds.add(party.userId);
+      if (party.userId) allRelevantUserIds.add(party.userId);
     }
-    if (excludeUserId) recipientIds.delete(excludeUserId);
 
     if (eventType === NotificationEventType.DISPUTE_RAISED) {
       const admins = await this.userRepository.find({
         where: [{ role: UserRole.ADMIN }, { role: UserRole.SUPER_ADMIN }],
       });
       for (const admin of admins) {
-        if (admin.id !== excludeUserId) recipientIds.add(admin.id);
+        allRelevantUserIds.add(admin.id);
       }
     }
 
-    for (const recipientId of recipientIds) {
-      const recipient = await this.userRepository.findOne({
-        where: { id: recipientId },
-      });
+    const recipientIds = new Set(allRelevantUserIds);
+    if (excludeUserId) recipientIds.delete(excludeUserId);
+
+    const allPartyUsers = await Promise.all(
+      [...allRelevantUserIds].map(async (userId) => ({
+        userId,
+        user: await this.userRepository.findOne({ where: { id: userId } }),
+      })),
+    );
+
+    const allPartyEmails = Array.from(
+      new Set(
+        allPartyUsers
+          .map(({ user }) => user?.email)
+          .filter(
+            (email): email is string =>
+              Boolean(email && email.trim().length > 0),
+          ),
+      ),
+    );
+
+    const recipientUsers = await Promise.all(
+      [...recipientIds].map(async (recipientId) => ({
+        recipientId,
+        user: await this.userRepository.findOne({ where: { id: recipientId } }),
+      })),
+    );
+
+    for (const { recipientId, user: recipient } of recipientUsers) {
+      const formattedPayload = {
+        ...payload,
+        email: recipient?.email ?? undefined,
+        partyEmails: allPartyEmails,
+        actionUrl:
+          typeof payload.actionUrl === 'string' && payload.actionUrl.trim().length > 0
+            ? payload.actionUrl
+            : this.buildNotificationActionUrl(escrow.id, payload),
+      };
+
       await this.notificationService
         .handleEscrowEvent(
           recipientId,
           eventType,
-          {
-            ...payload,
-            email: recipient?.email ?? undefined,
-          },
+          formattedPayload,
           this.generateIdempotencyKey(
             eventType,
             escrow.id,
@@ -1318,6 +1402,35 @@ export class EscrowService {
         )
         .catch(() => undefined);
     }
+  }
+
+  private buildNotificationActionUrl(
+    escrowId: string,
+    payload: Record<string, unknown> = {},
+  ): string {
+    const baseUrl = (process.env.FRONTEND_URL ?? 'https://app.vaultix.io').replace(
+      /\/+$/,
+      '',
+    );
+
+    const disputeId =
+      typeof payload.disputeId === 'string' && payload.disputeId.trim().length > 0
+        ? payload.disputeId.trim()
+        : undefined;
+    const conditionId =
+      typeof payload.conditionId === 'string' && payload.conditionId.trim().length > 0
+        ? payload.conditionId.trim()
+        : undefined;
+
+    if (disputeId) {
+      return `${baseUrl}/disputes/${encodeURIComponent(disputeId)}`;
+    }
+
+    if (conditionId) {
+      return `${baseUrl}/escrows/${encodeURIComponent(escrowId)}?condition=${encodeURIComponent(conditionId)}`;
+    }
+
+    return `${baseUrl}/escrows/${encodeURIComponent(escrowId)}`;
   }
 
   async proposeMilestoneChange(
@@ -1490,6 +1603,8 @@ export class EscrowService {
             role: party.role,
             acceptedByUserId: userId,
             email: acceptedUser?.email ?? undefined,
+            actionUrl: this.buildNotificationActionUrl(escrowId),
+            partyEmails: acceptedUser?.email ? [acceptedUser.email] : undefined,
           },
           this.generateIdempotencyKey(
             NotificationEventType.PARTY_ACCEPTED,
@@ -1552,6 +1667,8 @@ export class EscrowService {
               role: party.role,
               rejectedByUserId: userId,
               email: rejectedUser?.email ?? undefined,
+              actionUrl: this.buildNotificationActionUrl(escrowId),
+              partyEmails: rejectedUser?.email ? [rejectedUser.email] : undefined,
             },
             this.generateIdempotencyKey(
               NotificationEventType.PARTY_REJECTED,
@@ -1669,6 +1786,18 @@ export class EscrowService {
       escrowId: escrow.id,
       reason: options.webhookReason,
     });
+
+    await this.notifyEscrowParticipants(
+      escrow,
+      NotificationEventType.ESCROW_EXPIRED,
+      {
+        escrowId: escrow.id,
+        escrowTitle: escrow.title,
+        reason: options.reason,
+        expiredAt: new Date().toISOString(),
+      },
+      options.actorId ?? '',
+    );
 
     return this.findOne(escrow.id);
   }
