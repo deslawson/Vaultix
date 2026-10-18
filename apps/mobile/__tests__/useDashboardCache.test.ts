@@ -109,7 +109,33 @@ describe('useDashboardCache', () => {
     expect(fetcher).not.toHaveBeenCalled();
     expect(result.current.offline).toBe(true);
     expect(result.current.data).toEqual(cachedPayload.data);
+    expect(result.current.updatedAt).toBe(cachedPayload.updatedAt);
     expect(result.current.loading).toBe(false);
+  });
+
+  it('marks cached payload as stale when it exceeds the refresh window', async () => {
+    (isOnline as jest.Mock).mockResolvedValue(false);
+
+    const cachedPayload = {
+      updatedAt: Date.now() - 1000 * 60 * 60,
+      stale: true,
+      data: { items: ['stale-cache'] },
+    };
+    (dashboardCache.getCachedDashboardData as jest.Mock).mockResolvedValue(cachedPayload);
+
+    const fetcher = jest.fn();
+    const { result } = renderHook(() => useDashboardCache(fetcher));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.data).toEqual(cachedPayload.data);
+    expect(result.current.updatedAt).toBe(cachedPayload.updatedAt);
+    expect(result.current.stale).toBe(true);
   });
 
   it('never leaves loading true when fetcher rejects', async () => {

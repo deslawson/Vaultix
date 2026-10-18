@@ -16,7 +16,10 @@ import { useRouter } from 'expo-router';
 import { escrowApi } from '../../services/api';
 import { Escrow, EscrowStatus } from '../../types/escrow';
 import { OfflineBanner } from '../../components/OfflineBanner';
+import CacheTimestamp from '../../components/CacheTimestamp';
+import StaleDataBadge from '../../components/StaleDataBadge';
 import { useNetworkStatus } from '../../hooks/useNetworkStatus';
+import { getCachedDashboardData } from '../../services/cache/dashboardCache';
 import { toFriendlyError, isOfflineError } from '../../utils/errors';
 import { colors } from '../../theme';
 
@@ -90,8 +93,23 @@ export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasNextPage, setHasNextPage] = useState(false);
+  const [cacheUpdatedAt, setCacheUpdatedAt] = useState<number>();
+  const [staleData, setStaleData] = useState(false);
   const pageRef = useRef(1);
   const { isOffline, markOffline, markOnline } = useNetworkStatus();
+
+  const readCachedEscrows = useCallback(async () => {
+    const cached = await getCachedDashboardData().catch(() => null);
+    if (!cached?.data) return false;
+
+    const payload = cached.data as { escrows?: Escrow[]; hasNextPage?: boolean } | Escrow[];
+    const nextEscrows = Array.isArray(payload) ? payload : payload.escrows ?? [];
+    setEscrows(nextEscrows);
+    setHasNextPage(Boolean(!Array.isArray(payload) && payload.hasNextPage));
+    setCacheUpdatedAt(cached.updatedAt);
+    setStaleData(cached.stale);
+    return true;
+  }, []);
 
   const fetchEscrows = useCallback(
     async (status: EscrowStatus | 'all', page: number, append = false) => {
@@ -99,16 +117,31 @@ export default function DashboardScreen() {
         const res = await escrowApi.list({ status, page, limit: 20 });
         setEscrows((prev) => (append ? [...prev, ...res.escrows] : res.escrows));
         setHasNextPage(res.hasNextPage);
+        setCacheUpdatedAt(Date.now());
+        setStaleData(false);
         pageRef.current = page;
         setError(null);
         markOnline();
       } catch (err) {
+        if (isOfflineError(err)) {
+          markOffline();
+          const usedCached = await readCachedEscrows();
+          if (usedCached) {
+            return;
+          }
+          setEscrows([]);
+          setHasNextPage(false);
+          setCacheUpdatedAt(undefined);
+          setStaleData(false);
+          setError(null);
+          return;
+        }
+
         const friendly = toFriendlyError(err);
         setError({ title: friendly.title, message: friendly.message });
-        if (isOfflineError(err)) markOffline();
       }
     },
-    [markOnline, markOffline],
+    [markOnline, markOffline, readCachedEscrows],
   );
 
   useEffect(() => {
@@ -132,6 +165,12 @@ export default function DashboardScreen() {
   return (
     <View style={styles.container}>
       <OfflineBanner visible={isOffline} />
+      {(cacheUpdatedAt || staleData) && (
+        <View style={styles.cacheStatus}>
+          <StaleDataBadge stale={staleData} />
+          <CacheTimestamp timestamp={cacheUpdatedAt} />
+        </View>
+      )}
 
       <FlatList
         horizontal
@@ -205,6 +244,7 @@ export default function DashboardScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  cacheStatus: { paddingHorizontal: 16, paddingTop: 8 },
   filterRow: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   filterTab: {
     paddingHorizontal: 16,

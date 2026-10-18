@@ -2,6 +2,7 @@
  * #719 — response interceptor clears session once and invokes handler.
  */
 import axios from 'axios';
+import * as apiMod from '../services/api';
 
 // We exercise the exported gate helpers + clearSession by simulating the
 // interceptor body with mocks (full axios adapter integration is heavy in RN).
@@ -23,14 +24,12 @@ describe('session expiry interceptor (#719)', () => {
   });
 
   it('clears session and calls handler once on first 401', async () => {
-    const apiMod = require('../services/api');
     apiMod.__resetSessionExpiryGateForTests();
     apiMod.setSessionExpiredHandler(mockHandler);
 
     // Invoke the response error interceptor registered on the default instance.
     // Axios stores handlers on interceptors.response.handlers
-    const handlers = (apiMod.default?.interceptors?.response as { handlers: { rejected?: (e: unknown) => Promise<unknown> }[] })?.handlers
-      ?? (require('../services/api') as { /* fallthrough */ });
+    const handlers = (apiMod.default?.interceptors?.response as { handlers: { rejected?: (e: unknown) => Promise<unknown> }[] })?.handlers ?? [];
 
     // Prefer calling through a mocked adapter path
     const client = axios.create();
@@ -49,12 +48,12 @@ describe('session expiry interceptor (#719)', () => {
     );
 
     const err401 = { response: { status: 401 }, isAxiosError: true };
-    await expect(client.interceptors.response.handlers[0].rejected!(err401)).rejects.toBeTruthy();
+    await expect(handlers[0]?.rejected?.(err401) ?? Promise.reject(err401)).rejects.toBeTruthy();
     expect(mockClearSession).toHaveBeenCalledTimes(1);
     expect(mockHandler).toHaveBeenCalledTimes(1);
 
     // Second 401 must not re-prompt
-    await expect(client.interceptors.response.handlers[0].rejected!(err401)).rejects.toBeTruthy();
+    await expect(handlers[0]?.rejected?.(err401) ?? Promise.reject(err401)).rejects.toBeTruthy();
     expect(mockClearSession).toHaveBeenCalledTimes(1);
     expect(mockHandler).toHaveBeenCalledTimes(1);
   });

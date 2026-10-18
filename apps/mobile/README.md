@@ -86,6 +86,13 @@ Per-environment defaults for `EXPO_PUBLIC_API_URL` (used when the variable is un
 
 ---
 
+## Offline dashboard behavior
+
+The dashboard keeps a cached copy of the escrow list and uses it automatically
+when the backend is unreachable. Cached data remains visible with a stale-data
+badge and a last-updated timestamp, and the pull-to-refresh gesture retries the
+latest network request without dropping the user into an empty error screen.
+
 ## Pointing the app at a local backend
 
 1. Start the backend (see [`apps/backend/README.md`](../backend/README.md)); it
